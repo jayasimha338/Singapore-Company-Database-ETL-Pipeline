@@ -1,0 +1,22 @@
+requests
+beautifulsoup4
+selenium
+webdriver-manager
+
+pandas
+numpy
+fuzzywuzzy
+python-Levenshtein
+nltk
+
+transformers
+torch
+tokenizers
+
+# Utilities
+python-dotenv
+tqdm
+
+pytest
+black
+flake8
