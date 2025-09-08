@@ -1,437 +1,424 @@
-# Singapore-Company-Database-ETL-Pipeline
+# main_etl.py
+# Main ETL pipeline orchestrator for Singapore Company Database
 
-## Technical Assessment Documentation
+import logging
+import time
+from datetime import datetime
+from typing import List, Dict
+import concurrent.futures
+from pathlib import Path
 
-## 1. Solution Summary
+# Import our modules
+from config import config
+from models import CompanyData
+from database import DatabaseManager
+from dataextractor import SGDataExtractor
+from web_scraper import WebScraper
+from llm_processor import LLMProcessor
+from entity_matcher import EntityMatcher
 
-### Overview
-Developed a comprehensive ETL pipeline that extracts company data from Singapore government sources, enriches it through web scraping and AI processing, and loads it into a structured database. The solution demonstrates advanced data engineering techniques including entity matching, LLM integration, and automated data quality assessment.
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-### Key Achievements
-- **10,000+ company records** extracted and processed
-- **Multi-source integration** from government APIs, websites, and social media
-- **AI-powered enrichment** using open-source LLMs for industry classification
-- **85% entity matching accuracy** with fuzzy string algorithms
-- **Automated data quality scoring** with 70%+ average completeness
-- **Production-ready architecture** with comprehensive error handling
-
-### Technical Approach
-1. **Extract**: Government APIs (Data.gov.sg, ACRA) + web scraping
-2. **Transform**: Entity matching, LLM enrichment, data validation
-3. **Load**: SQLite database with optimized schema and indexing
-4. **Monitor**: Real-time quality metrics and performance tracking
-
----
-
-## 2. Market Study Insights
-
-### Singapore Business Landscape Analysis
-
-#### **Industry Distribution**
-Based on extracted data from 5,247 companies:
-
-| Industry | Company Count | Percentage |
-|----------|---------------|------------|
-| Technology | 1,247 | 23.8% |
-| Professional Services | 892 | 17.0% |
-| Manufacturing | 678 | 12.9% |
-| Retail | 534 | 10.2% |
-| Finance | 423 | 8.1% |
-| Food & Beverage | 387 | 7.4% |
-| Healthcare | 312 | 5.9% |
-| Real Estate | 298 | 5.7% |
-| Education | 267 | 5.1% |
-| Transportation | 209 | 4.0% |
-
-#### **Key Market Insights**
-
-**🚀 Technology Dominance**
-- Technology sector represents nearly 1 in 4 companies
-- Strong presence in software development, AI, and fintech
-- Aligns with Singapore's Smart Nation initiative
-
-**💼 Professional Services Hub**
-- Second-largest sector with consulting, legal, and financial services
-- Reflects Singapore's role as regional business hub
-- High concentration of multinational headquarters
-
-**🏭 Manufacturing Evolution**
-- Significant manufacturing presence (12.9%)
-- Focus on high-tech and precision manufacturing
-- Electronics and semiconductor industries prominent
-
-**📊 Company Size Distribution**
-- Small companies (1-50 employees): 62%
-- Medium companies (51-250 employees): 28%
-- Large companies (250+ employees): 10%
-
-**🌐 Digital Presence**
-- 67% of companies have websites
-- 34% maintain LinkedIn profiles
-- 23% active on Facebook
-- 15% use Instagram for business
-
----
-
-## 3. Sources of Information
-
-### Primary Data Sources
-
-#### **3.1 Singapore Government Sources**
-
-**Data.gov.sg API**
-- **URL**: https://data.gov.sg/api
-- **Access Method**: REST API with JSON responses
-- **Data Coverage**: ACRA business profiles, industry classifications
-- **Fields Obtained**: UEN, company name, registration details, SSIC codes
-- **Update Frequency**: Monthly
-- **Rate Limits**: 1000 requests/hour (public tier)
-
-**ACRA Information on Corporate Entities**
-- **URL**: https://data.gov.sg/dataset/acra-information-on-corporate-entities
-- **Access Method**: CSV download + API queries
-- **Data Coverage**: All registered Singapore companies
-- **Fields Obtained**: 
-  - Entity name and UEN
-  - Registration address
-  - Company status
-  - Primary/secondary SSIC codes
-  - Incorporation date
-- **Records Available**: 500,000+ active entities
-
-#### **3.2 Web Scraping Sources**
-
-**Company Websites**
-- **Access Method**: Selenium WebDriver + BeautifulSoup
-- **Rate Limiting**: 0.5 seconds between requests
-- **Success Rate**: 73% successful scrapes
-- **Fields Extracted**:
-  - Contact information (email, phone)
-  - Social media links
-  - Company descriptions
-  - Products/services offered
-  - Employee count indicators
-
-**Social Media Platforms**
-- **LinkedIn**: Company profile pages
-- **Facebook**: Business pages
-- **Instagram**: Business accounts
-- **Extraction Method**: Link detection from company websites
-
-### Secondary Data Sources
-
-#### **3.3 Search Engine Data**
-- **Purpose**: Website discovery for companies without listed URLs
-- **Method**: Constructed search queries using company names
-- **Success Rate**: 45% website discovery rate
-
-#### **3.4 Industry Classification References**
-- **Singapore Standard Industrial Classification (SSIC) 2020**
-- **Purpose**: Industry standardization and mapping
-- **Source**: Department of Statistics Singapore
-
----
-
-## 4. AI Model Used & Rationale
-
-### **Model Selection: Microsoft DialoGPT-Medium**
-
-#### **Why DialoGPT-Medium?**
-
-**✅ Advantages:**
-- **Lightweight**: 345M parameters, suitable for local deployment
-- **Fast inference**: <2 seconds per classification on CPU
-- **Open source**: No API costs or rate limits
-- **Stable**: Well-tested model with consistent outputs
-- **Resource efficient**: Runs on 8GB RAM systems
-
-**❌ Trade-offs:**
-- Lower accuracy than larger models (GPT-3.5/4)
-- Limited context window (1024 tokens)
-- Requires careful prompt engineering
-
-#### **Prompt Engineering Examples**
-
-**Industry Classification Prompt:**
-```python
-prompt = f"""
-Based on the company description below, classify it into ONE of these industries:
-Technology, Finance, Healthcare, Manufacturing, Retail, Education, 
-Real Estate, Transportation, Food & Beverage, Professional Services
-
-Company description: {company_description[:200]}
-
-The industry is:"""
-
-# Example interaction:
-INPUT: "We develop mobile applications and provide software consulting services for enterprises in Southeast Asia."
-OUTPUT: "Technology"
-CONFIDENCE: 95%
-```
-
-**Keyword Extraction Prompt:**
-```python
-prompt = f"""
-Extract 5-10 relevant business keywords from this company description.
-Focus on services, products, and industry terms.
-
-Description: {description}
-
-Keywords:"""
-
-# Example interaction:
-INPUT: "Leading provider of cloud infrastructure and cybersecurity solutions for financial institutions."
-OUTPUT: "cloud infrastructure, cybersecurity, financial institutions, solutions, technology services"
-```
-
-#### **API Integration Architecture**
-
-```python
-class LLMProcessor:
-    def __init__(self, model_name="microsoft/DialoGPT-medium"):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name)
-        self.generator = pipeline('text-generation', 
-                                model=self.model, 
-                                tokenizer=self.tokenizer)
+class SGCompanyETL:
+    """Main ETL pipeline orchestrator"""
     
-    def classify_industry(self, description):
-        response = self.generator(prompt, max_length=150, temperature=0.3)
-        return self.extract_industry_from_response(response)
-```
-
-#### **Performance Metrics**
-- **Classification Accuracy**: 78% (validated against manual labeling)
-- **Processing Speed**: 450 companies/hour
-- **Memory Usage**: 3.2GB peak
-- **Fallback Rate**: 22% (uses rule-based classification)
-
-#### **Alternative Models Considered**
-
-| Model | Pros | Cons | Decision |
-|-------|------|------|----------|
-| Llama-2-7B | Higher accuracy | 13GB RAM required | Rejected (resource constraints) |
-| GPT-3.5 API | Best accuracy | API costs, rate limits | Rejected (cost/complexity) |
-| BERT-base | Fast, efficient | Poor text generation | Rejected (classification only) |
-| DialoGPT-Medium | Balanced | Moderate accuracy | ✅ **Selected** |
-
----
-
-## 5. Technology Justification
-
-### **ETL Framework: Custom Python Pipeline**
-
-#### **Why Custom Instead of Apache Airflow/Prefect?**
-
-**✅ Advantages:**
-- **Simplicity**: No additional infrastructure required
-- **Transparency**: Full control over execution flow
-- **Debugging**: Easier to trace and fix issues
-- **Deployment**: Single Python application
-- **Cost**: No orchestration platform licensing
-
-**✅ When to Consider Alternatives:**
-- **Airflow**: For complex scheduling and dependencies
-- **Prefect**: For cloud-native deployments
-- **Luigi**: For Spotify-style data pipelines
-
-### **Web Scraping: Selenium + BeautifulSoup**
-
-#### **Technology Stack Rationale**
-
-**Selenium WebDriver:**
-- **Pros**: Handles JavaScript, simulates real browsers
-- **Cons**: Resource-intensive, slower than requests
-- **Use Case**: Dynamic content, complex websites
-
-**BeautifulSoup:**
-- **Pros**: Fast HTML parsing, simple API
-- **Cons**: No JavaScript support
-- **Use Case**: Static content extraction
-
-**Alternative Considered: Scrapy**
-- **Rejected**: Overkill for this use case
-- **Better For**: Large-scale, distributed scraping
-
-### **Database: SQLite → PostgreSQL Migration Path**
-
-#### **Current Choice: SQLite**
-**✅ Advantages:**
-- **Zero configuration**: File-based database
-- **ACID compliance**: Reliable transactions
-- **Cross-platform**: Works everywhere
-- **Embedded**: No server required
-
-**📈 Migration Recommendation:**
-For production scale (100K+ companies):
-```sql
--- PostgreSQL schema with partitioning
-CREATE TABLE companies_2024 PARTITION OF companies 
-FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
-
--- Indexes for performance
-CREATE INDEX CONCURRENTLY idx_companies_industry_btree 
-ON companies USING btree(industry);
-```
-
-### **Entity Matching: FuzzyWuzzy + Custom Logic**
-
-#### **Matching Algorithm Hierarchy:**
-
-1. **Exact UEN Match** (100% confidence)
-2. **Website Domain Match** (95% confidence)  
-3. **Fuzzy Name Match** (85% threshold)
-
-```python
-def calculate_similarity(name1, name2):
-    # Multi-method approach
-    ratio = fuzz.ratio(norm_name1, norm_name2)
-    token_sort = fuzz.token_sort_ratio(norm_name1, norm_name2)
-    token_set = fuzz.token_set_ratio(norm_name1, norm_name2)
+    def __init__(self):
+        logger.info("Initializing Singapore Company ETL Pipeline...")
+        
+        # Initialize components
+        self.db_manager = DatabaseManager(config.database.path)
+        self.data_extractor = SGDataExtractor()
+        self.web_scraper = WebScraper(
+            headless=config.scraping.headless_browser,
+            use_selenium=config.etl.enable_website_scraping
+        )
+        self.llm_processor = LLMProcessor(config.llm.model_name) if config.etl.enable_llm_enrichment else None
+        self.entity_matcher = EntityMatcher(config.data_quality.fuzzy_match_threshold)
+        
+        # Performance tracking
+        self.stats = {
+            'start_time': None,
+            'end_time': None,
+            'companies_extracted': 0,
+            'companies_processed': 0,
+            'companies_loaded': 0,
+            'websites_scraped': 0,
+            'llm_enrichments': 0,
+            'duplicates_removed': 0
+        }
+        
+        logger.info("ETL Pipeline initialized successfully")
     
-    # Weighted average favoring token methods
-    return (ratio * 0.2 + token_sort * 0.4 + token_set * 0.4)
-```
-
-**Alternatives Considered:**
-- **Dedupe Library**: Too complex for current scale
-- **Record Linkage**: Academic focus, less practical
-- **Splink**: Government-focused, overkill
-
----
-
-## 6. Architecture Components
-
-### **System Architecture Overview**
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Data Sources  │────│   ETL Pipeline   │────│    Database     │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                       │                       │
-    ┌────▼────┐              ┌───▼───┐               ┌───▼───┐
-    │ Gov APIs│              │Extract│               │SQLite │
-    │Websites │              │       │               │Schema │
-    │Social   │              │       │               │Indexes│
-    └─────────┘              └───┬───┘               └───────┘
-                                 │
-                             ┌───▼───┐
-                             │Trans- │
-                             │form   │
-                             │• LLM  │
-                             │• Match│
-                             │• Valid│
-                             └───┬───┘
-                                 │
-                             ┌───▼───┐
-                             │ Load  │
-                             │Batch  │
-                             │Insert │
-                             └───────┘
-```
-
-### **Data Flow Architecture**
-
-```
-Input Sources → Extraction → Transformation → Loading → Output
-     │              │             │              │         │
-┌────▼────┐    ┌────▼────┐   ┌────▼────┐    ┌───▼───┐ ┌───▼───┐
-│Gov APIs │    │Raw Data │   │Processed│    │SQLite │ │Reports│
-│Websites │────│Queue    │───│Data     │────│Tables │─│Quality│
-│Search   │    │JSON     │   │Objects  │    │Indexes│ │Stats  │
-└─────────┘    └─────────┘   └─────────┘    └───────┘ └───────┘
-                    │             │
-                    ▼             ▼
-              ┌─────────┐   ┌─────────┐
-              │Scraping │   │LLM      │
-              │Engine   │   │Processor│
-              │Rate     │   │Industry │
-              │Limited  │   │Keywords │
-              └─────────┘   └─────────┘
-```
-
-### **Quality Assurance Pipeline**
-
-```
-Data Input → Validation → Enhancement → Verification → Storage
-     │           │            │            │            │
-┌────▼────┐ ┌────▼────┐  ┌───▼────┐  ┌────▼────┐  ┌───▼───┐
-│Raw      │ │Format   │  │LLM     │  │Entity   │  │Clean  │
-│Company  │─│Check    │──│Enrich  │──│Match    │──│Records│
-│Data     │ │Email    │  │Classify│  │Dedupe   │  │DB     │
-└─────────┘ │Phone    │  │Keywords│  │Merge    │  └───────┘
-            │URL      │  └────────┘  └─────────┘
-            └─────────┘
-```
-
----
-
-## 7. Performance Metrics & Results
-
-### **Extraction Performance**
-- **Total Records Processed**: 10,247 companies
-- **Government Sources**: 8,500 records (83%)
-- **Web Scraping Success**: 1,747 websites (67% success rate)
-- **Processing Speed**: 350 companies/hour average
-
-### **Data Quality Achievements**
-- **Overall Completeness**: 73.2% average
-- **UEN Coverage**: 95.8%
-- **Industry Classification**: 89.1%
-- **Website URLs**: 67.3%
-- **Contact Information**: 45.8%
-- **Social Media Links**: 34.2%
-
-### **Entity Matching Results**
-- **Duplicates Identified**: 523 (5.1% of total)
-- **Merge Accuracy**: 94.3% (manual verification)
-- **False Positives**: 1.2%
-- **Processing Time**: 2.3 seconds per comparison
-
----
-
-## 8. Lessons Learned & Recommendations
-
-### **Technical Insights**
-1. **Rate Limiting Critical**: Prevented IP blocking during scraping
-2. **Batch Processing**: 10x performance improvement over individual inserts
-3. **Error Handling**: 23% of websites required fallback strategies
-4. **Memory Management**: Streaming processing essential for large datasets
-
-### **Data Quality Insights**
-1. **Government Data**: High quality but limited fields
-2. **Website Data**: Rich but inconsistent format
-3. **Social Media**: Low coverage but high value when available
-4. **Entity Matching**: UEN matching 100% reliable, name matching 85%
-
-### **Scalability Recommendations**
-1. **Database**: Migrate to PostgreSQL for 100K+ records
-2. **Processing**: Implement distributed processing with Celery
-3. **Storage**: Add Redis caching layer
-4. **Monitoring**: Implement Prometheus/Grafana dashboards
-
----
-
-## 9. Future Enhancements
-
-### **Immediate Improvements** (Next 2 weeks)
-- [ ] Add more industry categories
-- [ ] Implement confidence scoring for LLM outputs
-- [ ] Add email validation service integration
-- [ ] Optimize batch processing algorithms
-
-### **Medium-term Goals** (Next 2 months)
-- [ ] Real-time data updates via change detection
-- [ ] API endpoints for external consumption
-- [ ] Advanced analytics and trend detection
-- [ ] Integration with Singapore business registries
-
-### **Long-term Vision** (Next 6 months)
-- [ ] Machine learning for data quality prediction
-- [ ] Automated anomaly detection
-- [ ] Multi-country expansion (Malaysia, Thailand)
-- [ ] Enterprise dashboard and visualization tools
-
----
-
-*This document represents the complete technical implementation and analysis of the Singapore Company Database ETL Pipeline project. All code, documentation, and insights are available in the GitHub repository.*
+    def run_pipeline(self, target_count: int = None) -> Dict:
+        """Run the complete ETL pipeline"""
+        if target_count is None:
+            target_count = config.etl.target_company_count
+        
+        self.stats['start_time'] = datetime.now()
+        logger.info(f"Starting ETL Pipeline with target count: {target_count}")
+        
+        try:
+            # Phase 1: Extract
+            logger.info("=" * 50)
+            logger.info("PHASE 1: DATA EXTRACTION")
+            logger.info("=" * 50)
+            raw_companies = self.extract_phase(target_count)
+            self.stats['companies_extracted'] = len(raw_companies)
+            
+            # Phase 2: Transform
+            logger.info("=" * 50)
+            logger.info("PHASE 2: DATA TRANSFORMATION")
+            logger.info("=" * 50)
+            processed_companies = self.transform_phase(raw_companies)
+            self.stats['companies_processed'] = len(processed_companies)
+            
+            # Phase 3: Load
+            logger.info("=" * 50)
+            logger.info("PHASE 3: DATA LOADING")
+            logger.info("=" * 50)
+            loaded_count = self.load_phase(processed_companies)
+            self.stats['companies_loaded'] = loaded_count
+            
+            # Phase 4: Report
+            self.stats['end_time'] = datetime.now()
+            self.generate_final_report()
+            
+            logger.info("ETL Pipeline completed successfully!")
+            return self.stats
+            
+        except Exception as e:
+            logger.error(f"ETL Pipeline failed: {e}", exc_info=True)
+            raise
+        
+        finally:
+            self.cleanup()
+    
+    def extract_phase(self, target_count: int) -> List[Dict]:
+        """Phase 1: Extract company data from various sources"""
+        logger.info("Starting data extraction phase...")
+        
+        all_companies = []
+        
+        # Extract from government sources
+        logger.info("Extracting from Singapore government sources...")
+        gov_companies = self.data_extractor.extract_companies_from_data_gov(
+            limit=target_count // 2
+        )
+        all_companies.extend(gov_companies)
+        
+        # Extract from CSV sources
+        logger.info("Extracting from CSV sources...")
+        csv_companies = self.data_extractor.extract_companies_from_csv_sources()
+        all_companies.extend(csv_companies)
+        
+        # Limit to target count
+        if len(all_companies) > target_count:
+            all_companies = all_companies[:target_count]
+        
+        logger.info(f"Extracted {len(all_companies)} companies from government sources")
+        
+        # Enrich with website data if enabled
+        if config.etl.enable_website_scraping:
+            all_companies = self.enrich_with_website_data(all_companies)
+        
+        return all_companies
+    
+    def enrich_with_website_data(self, companies: List[Dict]) -> List[Dict]:
+        """Enrich companies with website data using concurrent processing"""
+        logger.info("Enriching companies with website data...")
+        
+        # Limit concurrent website scraping to avoid being blocked
+        max_websites_to_scrape = min(len(companies), 200)  # Reasonable limit for demo
+        companies_to_scrape = companies[:max_websites_to_scrape]
+        
+        def scrape_single_company(company_data):
+            try:
+                company_name = company_data.get('company_name', '')
+                
+                # Find or generate website URL
+                website = company_data.get('website')
+                if not website:
+                    website = self.data_extractor.search_company_websites(company_name)
+                
+                if website:
+                    company_data['website'] = website
+                    
+                    # Scrape website for additional data
+                    scraped_data = self.web_scraper.scrape_company_website(website)
+                    
+                    # Merge scraped data
+                    for key, value in scraped_data.items():
+                        if value and not company_data.get(key):
+                            company_data[key] = value
+                    
+                    self.stats['websites_scraped'] += 1
+                    
+                    # Add delay to be respectful
+                    time.sleep(config.scraping.delay_between_requests)
+                
+                return company_data
+                
+            except Exception as e:
+                logger.error(f"Error scraping website for {company_name}: {e}")
+                return company_data
+        
+        # Process companies with limited concurrency
+        with concurrent.futures.ThreadPoolExecutor(max_workers=config.etl.max_workers) as executor:
+            # Submit jobs in batches
+            batch_size = config.etl.batch_size
+            enriched_companies = []
+            
+            for i in range(0, len(companies_to_scrape), batch_size):
+                batch = companies_to_scrape[i:i + batch_size]
+                
+                logger.info(f"Processing website batch {i//batch_size + 1} ({len(batch)} companies)")
+                
+                # Submit batch jobs
+                future_to_company = {
+                    executor.submit(scrape_single_company, company): company 
+                    for company in batch
+                }
+                
+                # Collect results
+                for future in concurrent.futures.as_completed(future_to_company):
+                    try:
+                        enriched_company = future.result(timeout=60)
+                        enriched_companies.append(enriched_company)
+                    except Exception as e:
+                        original_company = future_to_company[future]
+                        logger.error(f"Failed to process company {original_company.get('company_name')}: {e}")
+                        enriched_companies.append(original_company)
+        
+        # Add remaining companies that weren't scraped
+        enriched_companies.extend(companies[max_websites_to_scrape:])
+        
+        logger.info(f"Website enrichment completed. Scraped {self.stats['websites_scraped']} websites")
+        return enriched_companies
+    
+    def transform_phase(self, companies: List[Dict]) -> List[CompanyData]:
+        """Phase 2: Transform and enrich company data"""
+        logger.info("Starting data transformation phase...")
+        
+        # Step 1: Entity matching and deduplication
+        logger.info("Performing entity matching and deduplication...")
+        original_count = len(companies)
+        deduplicated_companies = self.entity_matcher.fuzzy_match_companies(companies)
+        self.stats['duplicates_removed'] = original_count - len(deduplicated_companies)
+        
+        logger.info(f"Removed {self.stats['duplicates_removed']} duplicates")
+        
+        # Step 2: LLM enrichment
+        if self.llm_processor and config.etl.enable_llm_enrichment:
+            logger.info("Performing LLM enrichment...")
+            deduplicated_companies = self.llm_enrichment(deduplicated_companies)
+        
+        # Step 3: Convert to CompanyData objects
+        logger.info("Converting to standardized format...")
+        company_objects = []
+        
+        for company_dict in deduplicated_companies:
+            try:
+                # Clean and standardize data
+                cleaned_data = self.clean_company_data(company_dict)
+                
+                # Create CompanyData object
+                company_obj = CompanyData(**cleaned_data)
+                company_objects.append(company_obj)
+                
+            except Exception as e:
+                logger.error(f"Error converting company {company_dict.get('company_name', 'Unknown')}: {e}")
+        
+        logger.info(f"Transformation completed. Processed {len(company_objects)} companies")
+        return company_objects
+    
+    def llm_enrichment(self, companies: List[Dict]) -> List[Dict]:
+        """Enrich companies using LLM"""
+        enriched_companies = []
+        
+        for i, company in enumerate(companies):
+            try:
+                if i % 50 == 0:
+                    logger.info(f"LLM enrichment progress: {i}/{len(companies)}")
+                
+                enriched_company = self.llm_processor.enhance_company_data(company)
+                enriched_companies.append(enriched_company)
+                self.stats['llm_enrichments'] += 1
+                
+            except Exception as e:
+                logger.error(f"LLM enrichment failed for {company.get('company_name')}: {e}")
+                enriched_companies.append(company)
+        
+        logger.info(f"LLM enrichment completed for {self.stats['llm_enrichments']} companies")
+        return enriched_companies
+    
+    def clean_company_data(self, company_dict: Dict) -> Dict:
+        """Clean and standardize company data"""
+        cleaned = {}
+        
+        # Map and clean fields
+        field_mapping = {
+            'uen': 'uen',
+            'entity_name': 'company_name',
+            'company_name': 'company_name',
+            'reg_street_name': None,  # Skip for now
+            'reg_postal_code': None,  # Skip for now
+            'primary_ssic_description': 'industry',
+            'website': 'website',
+            'linkedin': 'linkedin',
+            'facebook': 'facebook',
+            'instagram': 'instagram',
+            'contact_email': 'contact_email',
+            'contact_phone': 'contact_phone',
+            'founding_year': 'founding_year',
+            'number_of_employees': 'number_of_employees',
+            'company_size': 'company_size',
+            'services_offered': 'services_offered',
+            'products_offered': 'products_offered',
+            'keywords': 'keywords',
+            'source': 'source_of_data'
+        }
+        
+        for source_field, target_field in field_mapping.items():
+            if target_field and source_field in company_dict:
+                value = company_dict[source_field]
+                if value:
+                    cleaned[target_field] = self.clean_field_value(target_field, value)
+        
+        # Set defaults
+        cleaned['hq_country'] = 'Singapore'
+        
+        return cleaned
+    
+    def clean_field_value(self, field_name: str, value) -> any:
+        """Clean individual field values"""
+        if value is None:
+            return None
+        
+        # Convert to string for text processing
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        
+        # Field-specific cleaning
+        if field_name in ['founding_year', 'number_of_employees']:
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return None
+        
+        elif field_name in ['website', 'linkedin', 'facebook', 'instagram']:
+            # Ensure URLs have proper protocol
+            if isinstance(value, str) and value:
+                if not value.startswith(('http://', 'https://')):
+                    value = 'https://' + value
+                return value
+        
+        elif field_name == 'uen':
+            # Clean UEN format
+            if isinstance(value, str):
+                return value.upper().strip()
+        
+        return value
+    
+    def load_phase(self, companies: List[CompanyData]) -> int:
+        """Phase 3: Load data into database"""
+        logger.info("Starting data loading phase...")
+        
+        try:
+            # Batch insert for better performance
+            batch_size = config.etl.batch_size
+            total_loaded = 0
+            
+            for i in range(0, len(companies), batch_size):
+                batch = companies[i:i + batch_size]
+                loaded_count = self.db_manager.insert_companies_batch(batch)
+                total_loaded += loaded_count
+                
+                logger.info(f"Loaded batch {i//batch_size + 1}: {loaded_count} companies")
+            
+            logger.info(f"Data loading completed. Loaded {total_loaded} companies")
+            return total_loaded
+            
+        except Exception as e:
+            logger.error(f"Error in load phase: {e}")
+            raise
+    
+    def generate_final_report(self):
+        """Generate final ETL report"""
+        duration = (self.stats['end_time'] - self.stats['start_time']).total_seconds()
+        
+        # Get database coverage report
+        coverage_report = self.db_manager.get_data_coverage_report()
+        
+        print("\n" + "=" * 60)
+        print("SINGAPORE COMPANY ETL PIPELINE - FINAL REPORT")
+        print("=" * 60)
+        print(f"Total Runtime: {duration:.2f} seconds")
+        print(f"Companies Extracted: {self.stats['companies_extracted']}")
+        print(f"Companies Processed: {self.stats['companies_processed']}")
+        print(f"Companies Loaded: {self.stats['companies_loaded']}")
+        print(f"Websites Scraped: {self.stats['websites_scraped']}")
+        print(f"LLM Enrichments: {self.stats['llm_enrichments']}")
+        print(f"Duplicates Removed: {self.stats['duplicates_removed']}")
+        
+        if coverage_report:
+            print(f"\nDATA COVERAGE:")
+            coverage = coverage_report.get('coverage', {})
+            print(f"Website Coverage: {coverage.get('website_coverage', 0):.1f}%")
+            print(f"LinkedIn Coverage: {coverage.get('linkedin_coverage', 0):.1f}%")
+            print(f"Email Coverage: {coverage.get('email_coverage', 0):.1f}%")
+            print(f"Industry Coverage: {coverage.get('industry_coverage', 0):.1f}%")
+            print(f"Average Quality Score: {coverage.get('avg_quality_score', 0):.1f}%")
+            
+            print(f"\nTOP 5 INDUSTRIES:")
+            for industry in coverage_report.get('top_industries', []):
+                print(f"  {industry['industry']}: {industry['company_count']} companies")
+        
+        print("=" * 60)
+    
+    def cleanup(self):
+        """Clean up resources"""
+        logger.info("Cleaning up resources...")
+        
+        try:
+            if self.web_scraper:
+                self.web_scraper.close()
+            
+            if self.llm_processor:
+                self.llm_processor.cleanup()
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
+    def run_pipeline_dry_run(self, target_count: int = 100):
+        """Run pipeline in dry-run mode (no database writes)"""
+        logger.info("Running ETL Pipeline in DRY-RUN mode...")
+        
+        # Limit to small number for testing
+        target_count = min(target_count, 100)
+        
+        # Extract
+        companies = self.extract_phase(target_count)
+        logger.info(f"Would extract {len(companies)} companies")
+        
+        # Transform
+        processed_companies = self.transform_phase(companies[:10])  # Limit for dry run
+        logger.info(f"Would process {len(processed_companies)} companies")
+        
+        # Show sample data
+        if processed_companies:
+            sample = processed_companies[0]
+            print(f"\nSample processed company:")
+            print(f"  Name: {sample.company_name}")
+            print(f"  UEN: {sample.uen}")
+            print(f"  Industry: {sample.industry}")
+            print(f"  Website: {sample.website}")
+            print(f"  Completeness: {sample.calculate_completeness_score():.1f}%")
+        
+        logger.info("Dry-run completed successfully!")
